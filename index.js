@@ -3,6 +3,7 @@ const mysql = require("mysql");
 const fs = require("fs");
 const cors = require("cors"); // Import CORS middleware
 const bodyParser = require("body-parser");
+const { formatISO } = require("date-fns");
 
 // Initialize Express app
 const app = express();
@@ -22,11 +23,11 @@ app.use(
 
 // MySQL connection setup
 const db = mysql.createConnection({
-  host: "svc-3482219c-a389-4079-b18b-d50662524e8a-shared-dml.aws-virginia-6.svc.singlestore.com",
-  port: 3333,
-  user: "user_gaurav",
-  password: "8nwbHXKwIti3RfuSnSBfLLjOSzqYXyss", // Replace with actual password
-  database: "db_gaurav_6d3ba",
+  host: "svc-2982b738-4c16-4976-a48e-6df07a8703af-dml.aws-singapore-1.svc.singlestore.com",
+  port: 3306,
+  user: "admin",
+  password: "WxS2REpaivcXf0mNRRBdUihIglj0kMs4", // Replace with actual password
+  database: "cscdb",
   ssl: {
     ca: fs.readFileSync("./singlestore_bundle.pem"), // Replace with actual path to the CA certificate
   },
@@ -44,7 +45,7 @@ db.connect((err) => {
 
 app.get("/data", (req, res) => {
   // SQL query to select all data from the 'app_usage' table
-  const query = "SELECT * FROM app_usage";
+  const query = "SELECT * FROM app_usage1";
 
   // Execute the query
   db.query(query, (err, results) => {
@@ -65,18 +66,103 @@ app.get("/data", (req, res) => {
   });
 });
 
+const formatToSQLDateTime = (isoString) => {
+  const date = new Date(isoString);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(
+    2,
+    "0"
+  )}-${String(date.getUTCDate()).padStart(2, "0")} ${String(
+    date.getUTCHours()
+  ).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}:${String(
+    date.getUTCSeconds()
+  ).padStart(2, "0")}`;
+};
+
+app.post("/usage-data", (req, res) => {
+  const { usageData } = req.body;
+
+  if (!Array.isArray(usageData) || usageData.length === 0) {
+    return res.status(400).json({ error: "Invalid or empty usage data" });
+  }
+
+  const truncateQuery = `TRUNCATE TABLE app_usage1;`;
+
+  const insertQuery = `
+    INSERT INTO app_usage1 (android_id, app_name, start_time, stop_time)
+    VALUES (?, ?, CONVERT_TZ(?, 'UTC', 'Asia/Kolkata'), CONVERT_TZ(?, 'UTC', 'Asia/Kolkata'))
+  `;
+
+  // Function to format to SQL-friendly datetime format
+  const formatToSQLDateTime = (isoString) => {
+    const date = new Date(isoString);
+    return date.toISOString().slice(0, 19).replace("T", " ");
+  };
+
+  db.query(truncateQuery, (truncateErr) => {
+    if (truncateErr) {
+      console.error("Error truncating table:", truncateErr);
+      return res
+        .status(500)
+        .json({
+          error: "Database truncate error",
+          details: truncateErr.message,
+        });
+    }
+
+    const insertPromises = usageData.map((usage) => {
+      const { android_id, app_name, start_time, end_time } = usage;
+      const formattedStartTime = formatToSQLDateTime(start_time);
+      const formattedStopTime = formatToSQLDateTime(end_time);
+
+      console.log(
+        `Inserting: Start Time (UTC formatted): ${formattedStartTime}, Stop Time (UTC formatted): ${formattedStopTime}`
+      );
+
+      return new Promise((resolve, reject) => {
+        db.query(
+          insertQuery,
+          [android_id, app_name, formattedStartTime, formattedStopTime],
+          (err, results) => {
+            if (err) {
+              console.error("Error inserting data:", err);
+              reject(err);
+            } else {
+              resolve(results.insertId);
+            }
+          }
+        );
+      });
+    });
+
+    Promise.all(insertPromises)
+      .then((insertedIds) => {
+        res
+          .status(201)
+          .json({ message: "All data inserted successfully", insertedIds });
+      })
+      .catch((error) => {
+        res
+          .status(500)
+          .json({
+            error: "Database error during insert",
+            details: error.message,
+          });
+      });
+  });
+});
+
 app.post("/data", (req, res) => {
-  const { id, android_id, app_name, start_time, stop_time, total_duration } =
-    req.body;
+  const { id, android_id, app_name, start_time, stop_time } = req.body;
 
   // Create an insert query
   const query =
-    "INSERT INTO app_usage (id, android_id, app_name, start_time, stop_time, total_duration) VALUES (?, ?, ?, ?, ?, ?)";
+    "INSERT INTO app_usage (id, android_id, app_name, start_time, stop_time ) VALUES (?, ?, ?, ?, ?)";
 
   // Execute the query with the provided values
+  console.log(query);
   db.query(
     query,
-    [id, android_id, app_name, start_time, stop_time, total_duration],
+    [id, android_id, app_name, start_time, stop_time],
     (err, results) => {
       if (err) {
         console.error(err);
