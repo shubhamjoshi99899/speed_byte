@@ -24,14 +24,11 @@ app.use(
 // MySQL connection pool setup
 const db = mysql.createPool({
   connectionLimit: 10, // Maximum number of concurrent connections
-  host: "svc-2982b738-4c16-4976-a48e-6df07a8703af-dml.aws-singapore-1.svc.singlestore.com",
+  host: "44.210.2.228",
   port: 3306,
   user: "admin",
   password: "WxS2REpaivcXf0mNRRBdUihIglj0kMs4", // Replace with actual password
   database: "cscdb",
-  ssl: {
-    ca: fs.readFileSync("./singlestore_bundle.pem"), // Ensure the path to the SSL certificate is correct
-  },
   connectTimeout: 20000, // Connection timeout in milliseconds (20 seconds)
   acquireTimeout: 20000, // Timeout for acquiring a connection from the pool
 });
@@ -95,12 +92,10 @@ app.post("/usage-data", (req, res) => {
   db.query(truncateQuery, (truncateErr) => {
     if (truncateErr) {
       console.error("Error truncating table:", truncateErr);
-      return res
-        .status(500)
-        .json({
-          error: "Database truncate error",
-          details: truncateErr.message,
-        });
+      return res.status(500).json({
+        error: "Database truncate error",
+        details: truncateErr.message,
+      });
     }
 
     const insertPromises = usageData.map((usage) => {
@@ -131,12 +126,10 @@ app.post("/usage-data", (req, res) => {
           .json({ message: "All data inserted successfully", insertedIds });
       })
       .catch((error) => {
-        res
-          .status(500)
-          .json({
-            error: "Database error during insert",
-            details: error.message,
-          });
+        res.status(500).json({
+          error: "Database error during insert",
+          details: error.message,
+        });
       });
   });
 });
