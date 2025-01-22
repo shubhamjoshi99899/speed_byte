@@ -92,7 +92,7 @@ app.post("/usage-data", (req, res) => {
     return res.status(400).json({ error: "No valid usage data found" });
   }
 
-  // Convert times to MySQL-compatible DATETIME format without changing time
+  // Convert times to MySQL-compatible DATETIME format
   const formatDateForMySQL = (dateStr) => {
     const date = new Date(dateStr);
     const year = date.getFullYear();
@@ -112,50 +112,119 @@ app.post("/usage-data", (req, res) => {
 
   console.log("Processed usageData for MySQL:", validUsageDataForMysql);
 
-  const insertQuery = `
-    INSERT INTO app_usage (android_id, app_name, start_time, end_time)
-    VALUES (?, ?, ?, ?)
+  // Step 1: Retrieve last_sync times for all apps
+  const getLastSyncQuery = `
+    SELECT app_name, last_sync 
+    FROM last_sync 
+    WHERE android_id = ?
   `;
 
-  const insertPromises = validUsageDataForMysql.map((usage) => {
-    const { android_id, app_name, start_time, end_time } = usage;
+  const androidId = validUsageDataForMysql[0].android_id;
 
-    return new Promise((resolve, reject) => {
-      db.query(
-        insertQuery,
-        [android_id, app_name, start_time, end_time],
-        (err, results) => {
-          if (err) reject(err);
-          else resolve(results.insertId);
-        }
-      );
+  db.query(getLastSyncQuery, [androidId], (err, lastSyncResults) => {
+    if (err) {
+      console.error("Error fetching last sync times:", err);
+      return res.status(500).json({ error: "Database error" });
+    }
+
+    const lastSyncMap = lastSyncResults.reduce((acc, row) => {
+      acc[row.app_name] = row.last_sync;
+      return acc;
+    }, {});
+
+    // Step 2: Filter usage data based on last_sync times
+    const filteredUsageData = validUsageDataForMysql.filter((usage) => {
+      const lastSync = lastSyncMap[usage.app_name];
+      return !lastSync || new Date(usage.end_time) > new Date(lastSync);
     });
-  });
 
-  Promise.allSettled(insertPromises)
-    .then((results) => {
-      const insertedIds = results
-        .filter((result) => result.status === "fulfilled")
-        .map((result) => result.value);
-      const rejectedEntries = results
-        .filter((result) => result.status === "rejected")
-        .map((result, index) => ({
-          reason: result.reason.message,
-          entry: validUsageDataForMysql[index],
-        }));
+    if (filteredUsageData.length === 0) {
+      return res.status(200).json({ message: "No new usage data to process" });
+    }
 
-      res.status(201).json({
-        message: "Data processing complete",
-        insertedIds,
-        failedEntries: rejectedEntries,
+    console.log("Filtered usageData:", filteredUsageData);
+
+    // Step 3: Insert filtered usage data into the app_usage table
+    const insertQuery = `
+      INSERT INTO app_usage (android_id, app_name, start_time, end_time)
+      VALUES (?, ?, ?, ?)
+    `;
+
+    const insertPromises = filteredUsageData.map((usage) => {
+      const { android_id, app_name, start_time, end_time } = usage;
+
+      return new Promise((resolve, reject) => {
+        db.query(
+          insertQuery,
+          [android_id, app_name, start_time, end_time],
+          (err, results) => {
+            if (err) reject(err);
+            else resolve(end_time);
+          }
+        );
       });
-    })
-    .catch((error) => {
-      console.error("Bulk insert error:", error);
-      res
-        .status(500)
-        .json({ error: "Bulk insert error", details: error.message });
     });
+
+    Promise.allSettled(insertPromises)
+      .then((results) => {
+        const maxEndTimes = {};
+        filteredUsageData.forEach((usage, index) => {
+          if (results[index].status === "fulfilled") {
+            const endTime = usage.end_time;
+            if (
+              !maxEndTimes[usage.app_name] ||
+              new Date(endTime) > new Date(maxEndTimes[usage.app_name])
+            ) {
+              maxEndTimes[usage.app_name] = endTime;
+            }
+          }
+        });
+
+        // Step 4: Update the last_sync table with new max end times
+        const updatePromises = Object.entries(maxEndTimes).map(
+          ([app_name, last_sync]) => {
+            const updateQuery = `
+              INSERT INTO last_sync (android_id, app_name, last_sync)
+              VALUES (?, ?, ?)
+              ON DUPLICATE KEY UPDATE last_sync = VALUES(last_sync)
+            `;
+
+            return new Promise((resolve, reject) => {
+              db.query(updateQuery, [androidId, app_name, last_sync], (err) => {
+                if (err) reject(err);
+                else resolve();
+              });
+            });
+          }
+        );
+
+        Promise.all(updatePromises)
+          .then(() => {
+            res.status(201).json({
+              message: "Data processing complete",
+              insertedRecords: filteredUsageData.length,
+            });
+          })
+          .catch((updateError) => {
+            console.error("Error updating last sync times:", updateError);
+            res
+              .status(500)
+              .json({
+                error: "Error updating last sync times",
+                details: updateError.message,
+              });
+          });
+      })
+      .catch((insertError) => {
+        console.error("Error inserting usage data:", insertError);
+        res
+          .status(500)
+          .json({
+            error: "Error inserting usage data",
+            details: insertError.message,
+          });
+      });
+  });
 });
 
 // 3. Device CRUD APIs
@@ -245,21 +314,21 @@ app.delete("/devices/:id", (req, res) => {
 
 // 1. POST/PUT endpoint to add or update last sync data
 app.post("/last-sync", (req, res) => {
-  const { android_id, last_sync } = req.body;
+  const { android_id, app_name, last_sync } = req.body;
 
-  if (!android_id || !last_sync) {
+  if (!android_id || !app_name || !last_sync) {
     return res
       .status(400)
-      .json({ error: "Android ID and last sync date are required" });
+      .json({ error: "Android ID, app name, and last sync date are required" });
   }
 
   const query = `
-    INSERT INTO last_sync (android_id, last_sync)
-    VALUES (?, ?)
+    INSERT INTO last_sync (android_id, app_name, last_sync)
+    VALUES (?, ?, ?)
     ON DUPLICATE KEY UPDATE last_sync = VALUES(last_sync)
   `;
 
-  db.query(query, [android_id, last_sync], (err, result) => {
+  db.query(query, [android_id, app_name, last_sync], (err, result) => {
     if (err) {
       console.error("Error inserting/updating last sync data:", err);
       return res.status(500).json({ error: "Database error" });
@@ -268,39 +337,47 @@ app.post("/last-sync", (req, res) => {
     if (result.affectedRows > 1) {
       res.status(200).json({ message: "Last sync data updated successfully" });
     } else {
-      res
-        .status(201)
-        .json({
-          message: "Last sync data created successfully",
-          id: result.insertId,
-        });
+      res.status(201).json({
+        message: "Last sync data created successfully",
+        id: result.insertId,
+      });
     }
   });
 });
 
-// 2. GET endpoint to retrieve last sync data for a specific android_id
+// GET endpoint to retrieve last sync data for a specific android_id (and optionally app_name)
 app.get("/last-sync/:android_id", (req, res) => {
   const { android_id } = req.params;
+  const { app_name } = req.query; // Optional app_name query parameter
 
   if (!android_id) {
     return res.status(400).json({ error: "Android ID is required" });
   }
 
-  const query = "SELECT * FROM last_sync WHERE android_id = ?";
+  let query = "SELECT * FROM last_sync WHERE android_id = ?";
+  const params = [android_id];
 
-  db.query(query, [android_id], (err, results) => {
+  // If app_name is provided, add it to the query
+  if (app_name) {
+    query += " AND app_name = ?";
+    params.push(app_name);
+  }
+
+  db.query(query, params, (err, results) => {
     if (err) {
       console.error("Error fetching last sync data:", err);
       return res.status(500).json({ error: "Database error" });
     }
 
     if (results.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "No last sync data found for this Android ID" });
+      return res.status(404).json({
+        message: app_name
+          ? `No last sync data found for Android ID ${android_id} and app name ${app_name}`
+          : `No last sync data found for Android ID ${android_id}`,
+      });
     }
 
-    res.status(200).json(results[0]);
+    res.status(200).json(results);
   });
 });
 
