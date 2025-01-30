@@ -66,7 +66,7 @@ app.post("/usage_data", (req, res) => {
 
   // Create an insert query
   const query =
-    "INSERT INTO app_usage (id, android_id, app_name, start_time, stop_time, total_duration) VALUES (?, ?, ?, ?, ?, ?)";
+    "INSERT INTO app_usage_new (id, android_id, app_name, start_time, stop_time, total_duration) VALUES (?, ?, ?, ?, ?, ?)";
 
   // Execute the query with the provided values
   db.query(
@@ -87,26 +87,51 @@ app.post("/usage_data", (req, res) => {
 
 /// CRUD API for table with fields `id`, `device_name`, and `android_id`
 
-// 1. CREATE a new device entry (POST /devices)
 app.post("/devices", (req, res) => {
-  const { device_name, android_id } = req.body;
+  const { device_name, android_id, unique_uuid } = req.body;
 
-  if (!device_name || !android_id) {
+  // Validate input
+  if (!device_name || !android_id || !unique_uuid) {
     return res
       .status(400)
-      .json({ error: "Device name and Android ID are required" });
+      .json({ error: "Device name, Android ID, and unique UUID are required" });
   }
 
-  const query = "INSERT INTO devices (device_name, android_id) VALUES (?, ?)";
-  db.query(query, [device_name, android_id], (err, result) => {
+  // Check for existing entry
+  const checkQuery =
+    "SELECT * FROM devices WHERE android_id = ? OR unique_uuid = ?";
+  db.query(checkQuery, [android_id, unique_uuid], (err, results) => {
     if (err) {
-      console.error("Error inserting data:", err);
+      console.error("Error checking existing data:", err);
       return res.status(500).json({ error: "Database error" });
     }
-    res.status(201).json({
-      message: "Device created successfully",
-      id: result.insertId,
-    });
+
+    if (results.length > 0) {
+      return res
+        .status(409)
+        .json({
+          error:
+            "Device with the same Android ID or unique UUID already exists",
+        });
+    }
+
+    // Insert new entry if no duplicate exists
+    const insertQuery =
+      "INSERT INTO devices (device_name, android_id, unique_uuid) VALUES (?, ?, ?)";
+    db.query(
+      insertQuery,
+      [device_name, android_id, unique_uuid],
+      (err, result) => {
+        if (err) {
+          console.error("Error inserting data:", err);
+          return res.status(500).json({ error: "Database error" });
+        }
+        res.status(201).json({
+          message: "Device created successfully",
+          id: result.insertId,
+        });
+      }
+    );
   });
 });
 

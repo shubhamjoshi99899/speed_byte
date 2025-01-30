@@ -81,11 +81,15 @@ app.post("/usage-data", (req, res) => {
 
   const isValidUsage = (usage) =>
     usage.android_id &&
+    usage.unique_uuid &&
     usage.app_name &&
     usage.start_time &&
     usage.end_time &&
     !isNaN(Date.parse(usage.start_time)) &&
-    !isNaN(Date.parse(usage.end_time));
+    !isNaN(Date.parse(usage.end_time)) &&
+    usage.latitude !== undefined &&
+    usage.longitude !== undefined &&
+    usage.address;
 
   const validUsageData = usageData.filter(isValidUsage);
   if (validUsageData.length === 0) {
@@ -112,16 +116,16 @@ app.post("/usage-data", (req, res) => {
 
   console.log("Processed usageData for MySQL:", validUsageDataForMysql);
 
-  // Step 1: Retrieve last_sync times for all apps
+  // Step 1: Retrieve last_sync times for all apps based on unique_uuid
   const getLastSyncQuery = `
     SELECT app_name, last_sync 
-    FROM last_sync 
-    WHERE android_id = ?
+    FROM last_sync_new 
+    WHERE unique_uuid = ?
   `;
 
-  const androidId = validUsageDataForMysql[0].android_id;
+  const uniqueUuid = validUsageDataForMysql[0].unique_uuid;
 
-  db.query(getLastSyncQuery, [androidId], (err, lastSyncResults) => {
+  db.query(getLastSyncQuery, [uniqueUuid], (err, lastSyncResults) => {
     if (err) {
       console.error("Error fetching last sync times:", err);
       return res.status(500).json({ error: "Database error" });
@@ -144,19 +148,37 @@ app.post("/usage-data", (req, res) => {
 
     console.log("Filtered usageData:", filteredUsageData);
 
-    // Step 3: Insert filtered usage data into the app_usage table
+    // Step 3: Insert filtered usage data into the usage_data_new table
     const insertQuery = `
-      INSERT INTO app_usage (android_id, app_name, start_time, end_time)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO app_usage_new(android_id, unique_uuid, app_name, start_time, end_time, latitude, longitude, address)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const insertPromises = filteredUsageData.map((usage) => {
-      const { android_id, app_name, start_time, end_time } = usage;
+      const {
+        android_id,
+        unique_uuid,
+        app_name,
+        start_time,
+        end_time,
+        latitude,
+        longitude,
+        address,
+      } = usage;
 
       return new Promise((resolve, reject) => {
         db.query(
           insertQuery,
-          [android_id, app_name, start_time, end_time],
+          [
+            android_id,
+            unique_uuid,
+            app_name,
+            start_time,
+            end_time,
+            latitude,
+            longitude,
+            address,
+          ],
           (err, results) => {
             if (err) reject(err);
             else resolve(end_time);
@@ -180,20 +202,24 @@ app.post("/usage-data", (req, res) => {
           }
         });
 
-        // Step 4: Update the last_sync table with new max end times
+        // Step 4: Update the last_sync_new table with new max end times
         const updatePromises = Object.entries(maxEndTimes).map(
           ([app_name, last_sync]) => {
             const updateQuery = `
-              INSERT INTO last_sync (android_id, app_name, last_sync)
-              VALUES (?, ?, ?)
+              INSERT INTO last_sync_new (unique_uuid, android_id, app_name, last_sync)
+              VALUES (?, ?, ?, ?)
               ON DUPLICATE KEY UPDATE last_sync = VALUES(last_sync)
             `;
 
             return new Promise((resolve, reject) => {
-              db.query(updateQuery, [androidId, app_name, last_sync], (err) => {
-                if (err) reject(err);
-                else resolve();
-              });
+              db.query(
+                updateQuery,
+                [uniqueUuid, android_id, app_name, last_sync],
+                (err) => {
+                  if (err) reject(err);
+                  else resolve();
+                }
+              );
             });
           }
         );
@@ -207,43 +233,64 @@ app.post("/usage-data", (req, res) => {
           })
           .catch((updateError) => {
             console.error("Error updating last sync times:", updateError);
-            res
-              .status(500)
-              .json({
-                error: "Error updating last sync times",
-                details: updateError.message,
-              });
+            res.status(500).json({
+              error: "Error updating last sync times",
+              details: updateError.message,
+            });
           });
       })
       .catch((insertError) => {
         console.error("Error inserting usage data:", insertError);
-        res
-          .status(500)
-          .json({
-            error: "Error inserting usage data",
-            details: insertError.message,
-          });
+        res.status(500).json({
+          error: "Error inserting usage data",
+          details: insertError.message,
+        });
       });
   });
 });
 
-// 3. Device CRUD APIs
 app.post("/devices", (req, res) => {
-  const { device_name, android_id } = req.body;
-  if (!device_name || !android_id) {
+  const { device_name, android_id, unique_uuid } = req.body;
+
+  // Validate input
+  if (!device_name || !android_id || !unique_uuid) {
     return res
       .status(400)
-      .json({ error: "Device name and Android ID are required" });
+      .json({ error: "Device name, Android ID, and unique UUID are required" });
   }
-  const query = "INSERT INTO devices (device_name, android_id) VALUES (?, ?)";
-  db.query(query, [device_name, android_id], (err, result) => {
+
+  // Check for existing entry
+  const checkQuery =
+    "SELECT * FROM devices_new WHERE android_id = ? OR unique_uuid = ?";
+  db.query(checkQuery, [android_id, unique_uuid], (err, results) => {
     if (err) {
-      console.error("Error inserting data:", err);
+      console.error("Error checking existing data:", err);
       return res.status(500).json({ error: "Database error" });
     }
-    res
-      .status(201)
-      .json({ message: "Device created successfully", id: result.insertId });
+
+    if (results.length > 0) {
+      return res.status(409).json({
+        error: "Device with the same Android ID or unique UUID already exists",
+      });
+    }
+
+    // Insert new entry if no duplicate exists
+    const insertQuery =
+      "INSERT INTO devices_new (device_name, android_id, unique_uuid) VALUES (?, ?, ?)";
+    db.query(
+      insertQuery,
+      [device_name, android_id, unique_uuid],
+      (err, result) => {
+        if (err) {
+          console.error("Error inserting data:", err);
+          return res.status(500).json({ error: "Database error" });
+        }
+        res.status(201).json({
+          message: "Device created successfully",
+          id: result.insertId,
+        });
+      }
+    );
   });
 });
 
