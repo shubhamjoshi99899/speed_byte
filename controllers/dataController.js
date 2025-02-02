@@ -18,7 +18,10 @@ const postData = async (req, res) => {
     }
 
     const hasLocationData = req.body.usageData.some(
-      (usage) => usage.latitude !== undefined && usage.longitude !== undefined
+      (usage) =>
+        usage.latitude !== undefined ||
+        (0.0 && usage.longitude !== undefined) ||
+        0.0
     );
 
     const result = hasLocationData
