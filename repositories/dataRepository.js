@@ -37,6 +37,35 @@ const insertAppUsageData = (usageDataArray) => {
   });
 };
 
+const insertAppUsageDataWithoutLocation = (usageDataArray) => {
+  return new Promise((resolve, reject) => {
+    if (!Array.isArray(usageDataArray) || usageDataArray.length === 0) {
+      return reject(new Error("No usage data provided for insertion."));
+    }
+
+    const query = `
+      INSERT INTO app_usage_new 
+      (android_id, unique_uuid, app_name, start_time, end_time) 
+      VALUES ?`;
+
+    const values = usageDataArray.map((usage) => [
+      usage.android_id,
+      usage.unique_uuid,
+      usage.app_name,
+      usage.start_time,
+      usage.end_time,
+    ]);
+
+    db.query(query, [values], (err, results) => {
+      if (err) {
+        console.error("Error inserting app usage data without location:", err);
+        return reject(err);
+      }
+      resolve({ insertedRecords: results.affectedRows });
+    });
+  });
+};
+
 const updateLastSyncTimes = (updates) => {
   return Promise.all(
     updates.map(
@@ -61,4 +90,9 @@ const updateLastSyncTimes = (updates) => {
   );
 };
 
-module.exports = { getLastSyncTimes, insertAppUsageData, updateLastSyncTimes };
+module.exports = {
+  getLastSyncTimes,
+  insertAppUsageData,
+  updateLastSyncTimes,
+  insertAppUsageDataWithoutLocation,
+};

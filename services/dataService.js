@@ -146,7 +146,7 @@ const processAppUsageDataWithoutLocation = async (usageData) => {
     return { message: "No new usage data to process", insertedRecords: 0 };
   }
 
-  await dataRepository.insertAppUsageData(filteredUsageData);
+  await dataRepository.insertAppUsageDataWithoutLocation(filteredUsageData);
 
   return {
     message: "Data processing complete",
