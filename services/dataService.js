@@ -11,7 +11,6 @@ const processAppUsageData = async (usageData) => {
     throw new Error("Invalid or empty usage data");
   }
 
-  // Filter valid usage data
   const validUsageData = usageData.filter(
     (usage) =>
       usage.android_id &&
@@ -29,7 +28,6 @@ const processAppUsageData = async (usageData) => {
     throw new Error("No valid usage data found");
   }
 
-  // Convert dates for MySQL
   const validUsageDataForMysql = validUsageData.map((usage) => ({
     ...usage,
     start_time: formatDateForMySQL(usage.start_time),
@@ -53,7 +51,6 @@ const processAppUsageData = async (usageData) => {
     return { message: "No new usage data to process", insertedRecords: 0 };
   }
 
-  // Fetch addresses asynchronously for all records
   const usageDataWithLocation = await Promise.all(
     filteredUsageData.map(async (usage) => {
       try {
@@ -73,7 +70,6 @@ const processAppUsageData = async (usageData) => {
 
   await dataRepository.insertAppUsageData(usageDataWithLocation);
 
-  // Track the last sync time, address, and location for each app
   const maxEndTimes = {};
   usageDataWithLocation.forEach((usage) => {
     if (
@@ -88,7 +84,6 @@ const processAppUsageData = async (usageData) => {
     }
   });
 
-  // Prepare update data
   const updateData = Object.entries(maxEndTimes).map(([app_name, data]) => [
     uniqueUuid,
     usageDataWithLocation[0].android_id,
@@ -106,4 +101,57 @@ const processAppUsageData = async (usageData) => {
   };
 };
 
-module.exports = { processAppUsageData };
+const processAppUsageDataWithoutLocation = async (usageData) => {
+  if (!Array.isArray(usageData) || usageData.length === 0) {
+    throw new Error("Invalid or empty usage data");
+  }
+
+  const validUsageData = usageData.filter(
+    (usage) =>
+      usage.android_id &&
+      usage.unique_uuid &&
+      usage.app_name &&
+      usage.start_time &&
+      usage.end_time &&
+      !isNaN(Date.parse(usage.start_time)) &&
+      !isNaN(Date.parse(usage.end_time))
+  );
+
+  if (validUsageData.length === 0) {
+    throw new Error("No valid usage data found");
+  }
+
+  const validUsageDataForMysql = validUsageData.map((usage) => ({
+    ...usage,
+    start_time: formatDateForMySQL(usage.start_time),
+    end_time: formatDateForMySQL(usage.end_time),
+    address: "N/A",
+    location: "N/A",
+  }));
+
+  const uniqueUuid = validUsageDataForMysql[0].unique_uuid;
+  const lastSyncResults = await dataRepository.getLastSyncTimes(uniqueUuid);
+
+  const lastSyncMap = lastSyncResults.reduce((acc, row) => {
+    acc[row.app_name] = row.last_sync;
+    return acc;
+  }, {});
+
+  const filteredUsageData = validUsageDataForMysql.filter((usage) => {
+    const lastSync = lastSyncMap[usage.app_name];
+    return !lastSync || new Date(usage.end_time) > new Date(lastSync);
+  });
+
+  if (filteredUsageData.length === 0) {
+    return { message: "No new usage data to process", insertedRecords: 0 };
+  }
+
+  await dataRepository.insertAppUsageData(filteredUsageData);
+
+  return {
+    message: "Data processing complete",
+    insertedRecords: filteredUsageData.length,
+  };
+};
+
+module.exports = { processAppUsageData, processAppUsageDataWithoutLocation };

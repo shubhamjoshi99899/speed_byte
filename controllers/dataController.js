@@ -17,7 +17,16 @@ const postData = async (req, res) => {
         .json({ error: "Missing usageData array in request body" });
     }
 
-    const result = await dataService.processAppUsageData(req.body.usageData);
+    const hasLocationData = req.body.usageData.some(
+      (usage) => usage.latitude !== undefined && usage.longitude !== undefined
+    );
+
+    const result = hasLocationData
+      ? await dataService.processAppUsageData(req.body.usageData)
+      : await dataService.processAppUsageDataWithoutLocation(
+          req.body.usageData
+        );
+
     res.status(201).json(result);
   } catch (err) {
     console.error("Error processing app usage data:", err);
