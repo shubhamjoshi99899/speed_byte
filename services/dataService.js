@@ -19,9 +19,7 @@ const processAppUsageData = async (usageData) => {
       usage.start_time &&
       usage.end_time &&
       !isNaN(Date.parse(usage.start_time)) &&
-      !isNaN(Date.parse(usage.end_time)) &&
-      usage.latitude !== undefined &&
-      usage.longitude !== undefined
+      !isNaN(Date.parse(usage.end_time))
   );
 
   if (validUsageData.length === 0) {
@@ -53,6 +51,13 @@ const processAppUsageData = async (usageData) => {
 
   const usageDataWithLocation = await Promise.all(
     filteredUsageData.map(async (usage) => {
+      if (
+        typeof usage.latitude !== "number" ||
+        typeof usage.longitude !== "number"
+      ) {
+        return { ...usage, address: "N/A", location: "N/A" };
+      }
+
       try {
         const { exact_location, region } = await getAddressFromCoordinates(
           usage.latitude,
