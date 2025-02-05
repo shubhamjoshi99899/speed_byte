@@ -108,8 +108,14 @@ const processAppUsageData = async (usageData) => {
 
 const processAppUsageDataWithoutLocation = async (usageData) => {
   if (!Array.isArray(usageData) || usageData.length === 0) {
+    console.error("❌ Received empty or invalid usage data");
     throw new Error("Invalid or empty usage data");
   }
+
+  console.log(
+    "✅ Raw received usage data:",
+    JSON.stringify(usageData, null, 2)
+  );
 
   const validUsageData = usageData.filter(
     (usage) =>
